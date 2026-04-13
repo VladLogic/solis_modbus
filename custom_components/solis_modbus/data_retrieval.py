@@ -15,6 +15,12 @@ from .sensors.solis_base_sensor import SolisSensorGroup
 
 _LOGGER = logging.getLogger(__name__)
 
+# Register for RC Force Charge/Discharge
+FORCE_CHARGE_REGISTER = 43135
+FORCE_NONE_VALUE = 0
+# How often (seconds) to re-write register 43135 to prevent inverter timeout
+FORCE_KEEPALIVE_INTERVAL = 180
+
 
 class DataRetrieval:
     def __init__(self, hass: HomeAssistant, controller: ModbusController):
@@ -34,6 +40,9 @@ class DataRetrieval:
         self._unsub_listeners = []
         self._startup_unsub = None  # Store startup listener separately
 
+        # Track desired force charge/discharge state for keep-alive re-writes
+        self._force_active_value: int = FORCE_NONE_VALUE
+
         if self.hass.is_running:
             self.hass.create_task(self.poll_controller())
         else:
@@ -51,6 +60,31 @@ class DataRetrieval:
             unsub()
         self._unsub_listeners = []
         self.connection_check = False  # Stop connection loop logic if any
+
+    def set_force_active(self, value: int):
+        """Register desired force charge/discharge state for keep-alive re-writes.
+
+        Args:
+            value: 1 = Force Charge, 2 = Force Discharge, 0 = None (stop keepalive)
+        """
+        self._force_active_value = value
+        _LOGGER.debug(f"({self.controller.host}.{self.controller.slave}) Force active state set to {value}")
+
+    async def force_keepalive(self, now=None):
+        """Re-write register 43135 periodically to prevent inverter timeout.
+
+        The Solis inverter resets force charge/discharge back to 0 after a while.
+        This method re-writes the desired value every FORCE_KEEPALIVE_INTERVAL seconds.
+        """
+        if self._force_active_value == FORCE_NONE_VALUE:
+            return
+        if not self.controller.connected() or not self.controller.enabled:
+            return
+        _LOGGER.debug(
+            f"({self.controller.host}.{self.controller.slave}) "
+            f"Force keep-alive: re-writing register {FORCE_CHARGE_REGISTER} = {self._force_active_value}"
+        )
+        await self.controller.async_write_holding_register(FORCE_CHARGE_REGISTER, self._force_active_value)
 
     async def check_connection(self, now=None):
         """Ensure the Modbus controller is connected, retrying on failure.
@@ -134,6 +168,10 @@ class DataRetrieval:
         )
 
         self.hass.create_task(self.controller.process_write_queue())
+
+        self._unsub_listeners.append(
+            async_track_time_interval(self.hass, self.force_keepalive, timedelta(seconds=FORCE_KEEPALIVE_INTERVAL))
+        )
 
     async def modbus_update_all(self):
         """Updates all sensor groups regardless of their poll speed.

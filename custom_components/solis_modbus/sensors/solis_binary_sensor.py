@@ -18,6 +18,9 @@ from custom_components.solis_modbus.helpers import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Register for RC Force Charge/Discharge
+_FORCE_CHARGE_REGISTER = 43135
+
 
 class SolisBinaryEntity(RestoreEntity, SwitchEntity):
     def __init__(self, hass, modbus_controller, entity_definition):
@@ -96,6 +99,8 @@ class SolisBinaryEntity(RestoreEntity, SwitchEntity):
             self._modbus_controller.enable_connection()
         else:
             self.set_register_bit(True)
+            if self._on_value is not None:
+                self._notify_force_state(self._on_value, True)
 
     def turn_off(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"{self._register}-{self._bit_position} turn off called ")
@@ -103,6 +108,8 @@ class SolisBinaryEntity(RestoreEntity, SwitchEntity):
             self._modbus_controller.disable_connection()
         else:
             self.set_register_bit(False)
+            if self._on_value is not None:
+                self._notify_force_state(self._on_value, False)
 
     def set_register_bit(self, value: bool):
         """Set or clear a specific bit in the Modbus register, enforcing dependencies and conflicts."""
@@ -150,6 +157,16 @@ class SolisBinaryEntity(RestoreEntity, SwitchEntity):
 
         self._attr_is_on = value
         self._attr_available = True
+
+    def _notify_force_state(self, on_value: int, is_on: bool):
+        """Notify DataRetrieval when a Force Charge/Discharge switch on register 43135 changes."""
+        if self._register != _FORCE_CHARGE_REGISTER:
+            return
+        data_retrievals = self._hass.data.get("solis_modbus", {}).get("data_retrieval", {})
+        for dr in data_retrievals.values():
+            if dr.controller is self._modbus_controller:
+                dr.set_force_active(on_value if is_on else 0)
+                break
 
     @property
     def device_info(self):

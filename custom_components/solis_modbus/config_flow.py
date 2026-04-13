@@ -45,7 +45,7 @@ BASE_CONFIG_SCHEMA = {
     vol.Optional("poll_interval_fast", default=10): vol.All(int, vol.Range(min=10)),
     vol.Optional("poll_interval_normal", default=15): vol.All(int, vol.Range(min=15)),
     vol.Optional("poll_interval_slow", default=30): vol.All(int, vol.Range(min=30)),
-    vol.Required("model", default=list(SOLIS_MODELS.keys())[0]): vol.In(SOLIS_MODELS),
+    vol.Required("model", default="S6-EH3P"): vol.In(SOLIS_MODELS),
     # Boolean options (Yes/No toggle)
     vol.Required("has_v2", default=True): bool,
     vol.Required("has_pv", default=True): bool,

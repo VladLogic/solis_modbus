@@ -456,6 +456,12 @@ hybrid_sensors = [
                 "state_class": SensorStateClass.MEASUREMENT,
             },
             {"type": "reserve", "register": ["33085", "33086", "33087", "33088", "33089", "33090", "33091", "33092"]},
+        ],
+    },
+    {
+        "register_start": 33093,
+        "poll_speed": PollSpeed.FAST,
+        "entities": [
             {
                 "name": "Temperature",
                 "unique": "solis_modbus_inverter_temperature",
@@ -467,6 +473,13 @@ hybrid_sensors = [
                 "state_class": SensorStateClass.MEASUREMENT,
                 "data_type": DataType.S16,
             },
+        ],
+    },
+    {
+        "register_start": 33094,
+        "poll_speed": PollSpeed.FAST,
+        "feature_requirement": [InverterFeature.PV],
+        "entities": [
             {
                 "name": "Grid Frequency",
                 "unique": "solis_modbus_inverter_grid_frequency",

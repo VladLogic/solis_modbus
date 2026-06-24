@@ -22,6 +22,13 @@ _LOGGER = logging.getLogger(__name__)
 
 _MAX_REGISTER_RECOVERY_DEPTH = 24
 
+# PATCH (force keep-alive): the inverter resets RC Force Charge/Discharge (register 43135)
+# back to 0 after its internal RC timeout. We re-write the desired value periodically so the
+# selected force mode stays active until the user turns the switch off.
+FORCE_CHARGE_REGISTER = 43135
+FORCE_NONE_VALUE = 0
+FORCE_KEEPALIVE_INTERVAL = 180  # seconds
+
 
 class DataRetrieval:
     def __init__(self, hass: HomeAssistant, controller: ModbusController):
@@ -40,6 +47,9 @@ class DataRetrieval:
 
         self._unsub_listeners = []
         self._startup_unsub = None  # Store startup listener separately
+
+        # PATCH (force keep-alive): desired RC force charge/discharge state (0/1/2)
+        self._force_active_value: int = FORCE_NONE_VALUE
 
         if self.hass.is_running:
             self.hass.create_task(self.poll_controller())
@@ -176,6 +186,34 @@ class DataRetrieval:
         self._unsub_listeners = []
         self.connection_check = False  # Stop connection loop logic if any
 
+    def set_force_active(self, value: int):
+        """PATCH (force keep-alive): register the desired force charge/discharge state.
+
+        Called by the RC Force Battery Charge/Discharge switches.
+
+        Args:
+            value: 1 = Force Charge, 2 = Force Discharge, 0 = None (stops the keep-alive)
+        """
+        self._force_active_value = value
+        _LOGGER.debug(f"({self.controller.host}.{self.controller.slave}) Force active state set to {value}")
+
+    async def force_keepalive(self, now=None):
+        """PATCH (force keep-alive): re-write register 43135 periodically.
+
+        The Solis inverter resets force charge/discharge back to 0 after its internal RC
+        timeout. While a force state is active we re-write the desired value every
+        FORCE_KEEPALIVE_INTERVAL seconds. No-op when inactive or disconnected.
+        """
+        if self._force_active_value == FORCE_NONE_VALUE:
+            return
+        if not self.controller.connected() or not self.controller.enabled:
+            return
+        _LOGGER.debug(
+            f"({self.controller.host}.{self.controller.slave}) "
+            f"Force keep-alive: re-writing register {FORCE_CHARGE_REGISTER} = {self._force_active_value}"
+        )
+        await self.controller.async_write_holding_register(FORCE_CHARGE_REGISTER, self._force_active_value)
+
     async def check_connection(self, now=None):
         """Ensure the Modbus controller is connected, retrying on failure.
 
@@ -262,6 +300,12 @@ class DataRetrieval:
         )
 
         self.hass.create_task(self.controller.process_write_queue())
+
+        # PATCH (force keep-alive): periodically re-write register 43135 while a force
+        # charge/discharge mode is active, so the inverter does not time out and reset it.
+        self._unsub_listeners.append(
+            async_track_time_interval(self.hass, self.force_keepalive, timedelta(seconds=FORCE_KEEPALIVE_INTERVAL))
+        )
 
     async def modbus_update_all(self):
         """Updates all sensor groups regardless of their poll speed.

@@ -229,7 +229,10 @@ class SolisSensorGroup:
                     default=entity.get("default", 0),
                     multiplier=entity.get("multiplier", 1),
                     data_type=entity.get("data_type", None),
-                    unique_id=unique_id_generator(controller, entity),
+                    # PATCH: build unique_id from the stable "unique" key string, not the whole
+                    # entity dict. Otherwise changing any param (multiplier, data_type, ...) changes
+                    # the dict's repr and HA spawns a duplicate entity with a _2/_3 suffix.
+                    unique_id=unique_id_generator(controller, entity.get("unique", "reserve")),
                     poll_speed=definition.get("poll_speed", PollSpeed.NORMAL),
                 ),
                 definition.get("entities", []),

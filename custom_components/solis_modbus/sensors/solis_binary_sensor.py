@@ -7,7 +7,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from custom_components.solis_modbus import ModbusController
-from custom_components.solis_modbus.const import CONTROLLER, REGISTER, SLAVE, VALUE
+from custom_components.solis_modbus.const import CONTROLLER, DOMAIN, REGISTER, SLAVE, VALUE
 from custom_components.solis_modbus.helpers import (
     cache_get,
     cache_save,
@@ -17,6 +17,12 @@ from custom_components.solis_modbus.helpers import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# PATCH (force keep-alive): the RC Force Charge/Discharge register. When one of these
+# switches is toggled we register the desired value with the controller's DataRetrieval
+# instance, which re-writes it periodically so the inverter does not time out and reset.
+_FORCE_CHARGE_REGISTER = 43135
+_FORCE_NONE_VALUE = 0
 
 
 class SolisBinaryEntity(RestoreEntity, SwitchEntity):
@@ -102,6 +108,9 @@ class SolisBinaryEntity(RestoreEntity, SwitchEntity):
             self._modbus_controller.enable_connection()
         else:
             self.set_register_bit(True)
+            # PATCH (force keep-alive): no-op unless this is the 43135 force switch
+            if self._on_value is not None:
+                self._notify_force_state(self._on_value, True)
 
     def turn_off(self, **kwargs: Any) -> None:
         _LOGGER.debug(f"{self._register}-{self._bit_position} turn off called ")
@@ -109,6 +118,28 @@ class SolisBinaryEntity(RestoreEntity, SwitchEntity):
             self._modbus_controller.disable_connection()
         else:
             self.set_register_bit(False)
+            # PATCH (force keep-alive): no-op unless this is the 43135 force switch
+            if self._on_value is not None:
+                self._notify_force_state(self._on_value, False)
+
+    def _notify_force_state(self, on_value, is_on):
+        """Register force charge/discharge intent with this controller's keep-alive loop.
+
+        Only the RC Force Charge/Discharge register (43135) is relevant. We look up the
+        DataRetrieval instance bound to THIS controller and tell it which value to keep
+        re-writing (1 = force charge, 2 = force discharge) or 0 to stop. This prevents the
+        inverter from silently reverting force mode after its internal RC timeout.
+        """
+        if self._register != _FORCE_CHARGE_REGISTER:
+            return
+        if on_value is None:
+            return
+
+        data_retrieval_map = self._hass.data.get(DOMAIN, {}).get("data_retrieval", {})
+        for data_retrieval in data_retrieval_map.values():
+            if getattr(data_retrieval, "controller", None) is self._modbus_controller:
+                data_retrieval.set_force_active(on_value if is_on else _FORCE_NONE_VALUE)
+                return
 
     def set_register_bit(self, value: bool):
         """Set or clear a specific bit in the Modbus register, enforcing dependencies and conflicts."""
